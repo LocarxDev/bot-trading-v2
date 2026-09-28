@@ -1,4 +1,3 @@
-import ccxt
 import pandas as pd
 import time
 import logging
@@ -62,19 +61,50 @@ ARQUIVO_HISTORICO = 'historico_trades_v2.json'
 ARQUIVO_RELATORIO = 'relatorio_ia.json'
 
 # ─────────────────────────────────────────────
-# EXCHANGE — Binance real (somente leitura de precos)
-# Ordens sao SIMULADAS internamente — nenhum dinheiro real movimentado
-# O Testnet da Binance bloqueia IPs de datacenter (erro 451),
-# por isso usamos a API publica real apenas para dados de mercado.
+# BINANCE REST API PUBLICA — sem autenticacao, sem ccxt
+# Apenas dados de mercado (OHLCV + ticker). Ordens 100% simuladas.
+# Evita o bloqueio 451 que ocorre em datacenters com /sapi/* autenticado.
 # ─────────────────────────────────────────────
-exchange = ccxt.binance({
-    'apiKey': API_KEY,
-    'secret': API_SECRET,
-    'enableRateLimit': True,
-    'options': {'defaultType': 'spot'}
-})
-# SEM set_sandbox_mode — usa Binance real para dados publicos de preco
-# Ordens nao sao enviadas (ver funcoes comprar/vender abaixo)
+BINANCE_BASE = 'https://api.binance.com'
+
+def _par_para_symbol(par: str) -> str:
+    """'BTC/USDT' -> 'BTCUSDT'"""
+    return par.replace('/', '')
+
+def binance_get(path: str, params: dict = None, retries: int = 3) -> dict | list:
+    url = BINANCE_BASE + path
+    for i in range(retries):
+        try:
+            r = requests.get(url, params=params, timeout=10)
+            r.raise_for_status()
+            return r.json()
+        except Exception as e:
+            if i == retries - 1:
+                raise
+            time.sleep(1)
+
+def fetch_ohlcv(par: str, interval: str = '1m', limit: int = 288) -> pd.DataFrame:
+    """Busca candles OHLCV da Binance (endpoint publico)."""
+    data = binance_get('/api/v3/klines', {
+        'symbol': _par_para_symbol(par),
+        'interval': interval,
+        'limit': limit,
+    })
+    df = pd.DataFrame(data, columns=[
+        'time', 'open', 'high', 'low', 'close', 'volume',
+        'close_time', 'quote_vol', 'trades', 'taker_buy_base',
+        'taker_buy_quote', 'ignore'
+    ])
+    df = df[['time', 'open', 'high', 'low', 'close', 'volume']].copy()
+    for col in ['open', 'high', 'low', 'close', 'volume']:
+        df[col] = df[col].astype(float)
+    df['time'] = pd.to_datetime(df['time'], unit='ms')
+    return df
+
+def fetch_ticker(par: str) -> dict:
+    """Busca preco atual do par (endpoint publico)."""
+    data = binance_get('/api/v3/ticker/price', {'symbol': _par_para_symbol(par)})
+    return {'last': float(data['price'])}
 
 # ─────────────────────────────────────────────
 # ESTADO GLOBAL
@@ -556,10 +586,7 @@ def sincronizar_posicao():
 # ─────────────────────────────────────────────
 def pegar_dados(par, timeframe=None, limit=288):
     tf = timeframe or TIMEFRAME
-    ohlcv = exchange.fetch_ohlcv(par, timeframe=tf, limit=limit)
-    df = pd.DataFrame(ohlcv, columns=['time', 'open', 'high', 'low', 'close', 'volume'])
-    df['time'] = pd.to_datetime(df['time'], unit='ms')
-    return df
+    return fetch_ohlcv(par, interval=tf, limit=limit)
 
 def calcular_rsi(df, periodo=RSI_PERIODO):
     delta = df['close'].diff()
@@ -710,7 +737,7 @@ def comprar(par, rsi):
         if len(estado['posicoes']) >= MAX_POSICOES:
             return
 
-        ticker = exchange.fetch_ticker(par)
+        ticker = fetch_ticker(par)
         preco  = ticker['last']
 
         valor_op = max(estado['capital_atual'] * RISCO_POR_TRADE, CAPITAL_BASE)
@@ -760,7 +787,7 @@ def comprar_reserva(par):
         if estado['reserva_usada'] or estado['capital_reserva'] <= 0:
             return
 
-        ticker        = exchange.fetch_ticker(par)
+        ticker        = fetch_ticker(par)
         preco         = ticker['last']
         valor_reserva = estado['capital_reserva']
 
@@ -824,7 +851,7 @@ def vender(par, motivo="SINAL"):
             return
 
         pos    = estado['posicoes'][par]
-        ticker = exchange.fetch_ticker(par)
+        ticker = fetch_ticker(par)
         preco  = ticker['last']
 
         qtd_sim = pos['quantidade']
@@ -912,12 +939,12 @@ def checar_risco(par):
         return False
 
     pos    = estado['posicoes'][par]
-    ticker = exchange.fetch_ticker(par)
+    ticker = fetch_ticker(par)
     preco  = ticker['last']
 
     # HIGH do candle atual para capturar picos intracandle
     try:
-        candles    = exchange.fetch_ohlcv(par, timeframe=TIMEFRAME, limit=2)
+        candles    = fetch_ohlcv(par, interval=TIMEFRAME, limit=2)
         high_atual = candles[-1][2]
         preco_pico_candle = max(preco, high_atual)
     except:
@@ -1016,7 +1043,7 @@ def rodar_bot():
             # Monitora posicoes abertas
             for par in list(estado['posicoes'].keys()):
                 try:
-                    ticker = exchange.fetch_ticker(par)
+                    ticker = fetch_ticker(par)
                     preco  = ticker['last']
                     pos    = estado['posicoes'][par]
                     pnl    = (preco - pos['preco_compra']) / pos['preco_compra'] * 100
