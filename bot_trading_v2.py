@@ -523,6 +523,17 @@ def get_relatorio():
     rel = gerar_relatorio_ia()
     return jsonify(rel)
 
+@app.route('/')
+def index():
+    return jsonify({
+        'bot': 'Trading v2',
+        'status': estado.get('status', 'rodando'),
+        'capital_atual': round(estado.get('capital_atual', 0), 2),
+        'posicoes_abertas': len(estado.get('posicoes', {})),
+        'total_trades': estado.get('total_trades', 0),
+        'endpoints': ['/status', '/historico', '/feed', '/stats', '/relatorio', '/health']
+    })
+
 @app.route('/health')
 def health():
     return jsonify({'ok': True, 'versao': 'v2', 'uptime': estado['ultimo_update']})
