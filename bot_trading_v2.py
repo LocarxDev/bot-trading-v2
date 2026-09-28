@@ -34,8 +34,10 @@ TELEGRAM_CHATS = ['1998336872']  # Apenas Silas
 # Pares monitorados — v2
 PARES = [
     'BTC/USDT', 'ETH/USDT', 'XRP/USDT', 'ADA/USDT',
-    'SOL/USDT', 'BNB/USDT', 'DOGE/USDT', 'LINK/USDT',
+    'SOL/USDT', 'AVAX/USDT', 'DOGE/USDT', 'LINK/USDT',
 ]
+# BNB removido — nao disponivel no Kraken (fonte de dados atual)
+# Substituido por AVAX/USDT
 
 TIMEFRAME              = '1m'
 CAPITAL_BASE           = 10.0       # minimo por ordem
@@ -61,33 +63,43 @@ ARQUIVO_HISTORICO = 'historico_trades_v2.json'
 ARQUIVO_RELATORIO = 'relatorio_ia.json'
 
 # ─────────────────────────────────────────────
-# BYBIT REST API PUBLICA — sem autenticacao, sem bloqueio de datacenter
-# A Binance bloqueia todos os IPs de cloud (Railway/AWS/GCP) com HTTP 451,
-# inclusive endpoints publicos. A Bybit nao bloqueia datacenters.
+# KRAKEN REST API PUBLICA — sem autenticacao, sem bloqueio de datacenter
+# Binance e Bybit bloqueiam IPs de cloud (Railway/AWS/GCP).
+# Kraken tem API publica totalmente aberta para qualquer IP.
 # Apenas dados de mercado (OHLCV + ticker). Ordens 100% simuladas.
 # ─────────────────────────────────────────────
-BYBIT_BASE = 'https://api.bybit.com'
+KRAKEN_BASE = 'https://api.kraken.com'
 
-# Mapeamento de intervalos: '1m' -> '1', '1h' -> '60'
-_INTERVAL_MAP = {
-    '1m': '1', '3m': '3', '5m': '5', '15m': '15',
-    '30m': '30', '1h': '60', '2h': '120', '4h': '240',
-    '6h': '360', '12h': '720', '1d': 'D',
+# Kraken usa "XBT" para Bitcoin internamente
+_KRAKEN_PAIR = {
+    'BTC/USDT':  'XBTUSDT',
+    'ETH/USDT':  'ETHUSDT',
+    'XRP/USDT':  'XRPUSDT',
+    'ADA/USDT':  'ADAUSDT',
+    'SOL/USDT':  'SOLUSDT',
+    'AVAX/USDT': 'AVAXUSDT',
+    'DOGE/USDT': 'DOGEUSDT',
+    'LINK/USDT': 'LINKUSDT',
 }
 
-def _par_para_symbol(par: str) -> str:
-    """'BTC/USDT' -> 'BTCUSDT'"""
-    return par.replace('/', '')
+# Intervalos em minutos
+_INTERVAL_MAP = {
+    '1m': 1, '5m': 5, '15m': 15, '30m': 30,
+    '1h': 60, '4h': 240, '1d': 1440,
+}
 
-def bybit_get(path: str, params: dict = None, retries: int = 3):
-    url = BYBIT_BASE + path
+def _kraken_pair(par: str) -> str:
+    return _KRAKEN_PAIR.get(par, par.replace('/', ''))
+
+def kraken_get(path: str, params: dict = None, retries: int = 3):
+    url = KRAKEN_BASE + path
     for i in range(retries):
         try:
             r = requests.get(url, params=params, timeout=10)
             r.raise_for_status()
             data = r.json()
-            if data.get('retCode', 0) != 0:
-                raise ValueError(f"Bybit erro: {data.get('retMsg')}")
+            if data.get('error'):
+                raise ValueError(f"Kraken erro: {data['error']}")
             return data['result']
         except Exception as e:
             if i == retries - 1:
@@ -95,35 +107,28 @@ def bybit_get(path: str, params: dict = None, retries: int = 3):
             time.sleep(1)
 
 def fetch_ohlcv(par: str, interval: str = '1m', limit: int = 288) -> pd.DataFrame:
-    """Busca candles OHLCV da Bybit (endpoint publico, sem bloqueio)."""
-    iv = _INTERVAL_MAP.get(interval, '1')
-    result = bybit_get('/v5/market/kline', {
-        'category': 'spot',
-        'symbol': _par_para_symbol(par),
-        'interval': iv,
-        'limit': min(limit, 1000),
-    })
-    # Bybit retorna: [startTime, open, high, low, close, volume, turnover]
-    # e vem em ordem decrescente — precisamos inverter
-    rows = result.get('list', [])
-    rows = list(reversed(rows))
-    df = pd.DataFrame(rows, columns=['time', 'open', 'high', 'low', 'close', 'volume', 'turnover'])
-    df = df[['time', 'open', 'high', 'low', 'close', 'volume']].copy()
-    for col in ['open', 'high', 'low', 'close', 'volume']:
+    """Busca candles OHLCV do Kraken (endpoint publico, sem bloqueio)."""
+    iv = _INTERVAL_MAP.get(interval, 1)
+    pair = _kraken_pair(par)
+    result = kraken_get('/0/public/OHLC', {'pair': pair, 'interval': iv})
+    data_key = [k for k in result.keys() if k != 'last'][0]
+    rows = result[data_key]
+    # Kraken: [time, open, high, low, close, vwap, volume, count]
+    rows = rows[-limit:]
+    df = pd.DataFrame(rows, columns=['time','open','high','low','close','vwap','volume','count'])
+    df = df[['time','open','high','low','close','volume']].copy()
+    for col in ['open','high','low','close','volume']:
         df[col] = df[col].astype(float)
-    df['time'] = pd.to_datetime(df['time'].astype('int64'), unit='ms')
+    df['time'] = pd.to_datetime(df['time'].astype('int64'), unit='s')
     return df
 
 def fetch_ticker(par: str) -> dict:
-    """Busca preco atual do par (endpoint publico Bybit)."""
-    result = bybit_get('/v5/market/tickers', {
-        'category': 'spot',
-        'symbol': _par_para_symbol(par),
-    })
-    tickers = result.get('list', [])
-    if not tickers:
-        raise ValueError(f"Ticker nao encontrado: {par}")
-    return {'last': float(tickers[0]['lastPrice'])}
+    """Busca preco atual do par (endpoint publico Kraken)."""
+    pair = _kraken_pair(par)
+    result = kraken_get('/0/public/Ticker', {'pair': pair})
+    data_key = list(result.keys())[0]
+    last_price = float(result[data_key]['c'][0])
+    return {'last': last_price}
 
 # ─────────────────────────────────────────────
 # ESTADO GLOBAL
