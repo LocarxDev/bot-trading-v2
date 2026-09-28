@@ -61,50 +61,69 @@ ARQUIVO_HISTORICO = 'historico_trades_v2.json'
 ARQUIVO_RELATORIO = 'relatorio_ia.json'
 
 # ─────────────────────────────────────────────
-# BINANCE REST API PUBLICA — sem autenticacao, sem ccxt
+# BYBIT REST API PUBLICA — sem autenticacao, sem bloqueio de datacenter
+# A Binance bloqueia todos os IPs de cloud (Railway/AWS/GCP) com HTTP 451,
+# inclusive endpoints publicos. A Bybit nao bloqueia datacenters.
 # Apenas dados de mercado (OHLCV + ticker). Ordens 100% simuladas.
-# Evita o bloqueio 451 que ocorre em datacenters com /sapi/* autenticado.
 # ─────────────────────────────────────────────
-BINANCE_BASE = 'https://api.binance.com'
+BYBIT_BASE = 'https://api.bybit.com'
+
+# Mapeamento de intervalos: '1m' -> '1', '1h' -> '60'
+_INTERVAL_MAP = {
+    '1m': '1', '3m': '3', '5m': '5', '15m': '15',
+    '30m': '30', '1h': '60', '2h': '120', '4h': '240',
+    '6h': '360', '12h': '720', '1d': 'D',
+}
 
 def _par_para_symbol(par: str) -> str:
     """'BTC/USDT' -> 'BTCUSDT'"""
     return par.replace('/', '')
 
-def binance_get(path: str, params: dict = None, retries: int = 3) -> dict | list:
-    url = BINANCE_BASE + path
+def bybit_get(path: str, params: dict = None, retries: int = 3):
+    url = BYBIT_BASE + path
     for i in range(retries):
         try:
             r = requests.get(url, params=params, timeout=10)
             r.raise_for_status()
-            return r.json()
+            data = r.json()
+            if data.get('retCode', 0) != 0:
+                raise ValueError(f"Bybit erro: {data.get('retMsg')}")
+            return data['result']
         except Exception as e:
             if i == retries - 1:
                 raise
             time.sleep(1)
 
 def fetch_ohlcv(par: str, interval: str = '1m', limit: int = 288) -> pd.DataFrame:
-    """Busca candles OHLCV da Binance (endpoint publico)."""
-    data = binance_get('/api/v3/klines', {
+    """Busca candles OHLCV da Bybit (endpoint publico, sem bloqueio)."""
+    iv = _INTERVAL_MAP.get(interval, '1')
+    result = bybit_get('/v5/market/kline', {
+        'category': 'spot',
         'symbol': _par_para_symbol(par),
-        'interval': interval,
-        'limit': limit,
+        'interval': iv,
+        'limit': min(limit, 1000),
     })
-    df = pd.DataFrame(data, columns=[
-        'time', 'open', 'high', 'low', 'close', 'volume',
-        'close_time', 'quote_vol', 'trades', 'taker_buy_base',
-        'taker_buy_quote', 'ignore'
-    ])
+    # Bybit retorna: [startTime, open, high, low, close, volume, turnover]
+    # e vem em ordem decrescente — precisamos inverter
+    rows = result.get('list', [])
+    rows = list(reversed(rows))
+    df = pd.DataFrame(rows, columns=['time', 'open', 'high', 'low', 'close', 'volume', 'turnover'])
     df = df[['time', 'open', 'high', 'low', 'close', 'volume']].copy()
     for col in ['open', 'high', 'low', 'close', 'volume']:
         df[col] = df[col].astype(float)
-    df['time'] = pd.to_datetime(df['time'], unit='ms')
+    df['time'] = pd.to_datetime(df['time'].astype('int64'), unit='ms')
     return df
 
 def fetch_ticker(par: str) -> dict:
-    """Busca preco atual do par (endpoint publico)."""
-    data = binance_get('/api/v3/ticker/price', {'symbol': _par_para_symbol(par)})
-    return {'last': float(data['price'])}
+    """Busca preco atual do par (endpoint publico Bybit)."""
+    result = bybit_get('/v5/market/tickers', {
+        'category': 'spot',
+        'symbol': _par_para_symbol(par),
+    })
+    tickers = result.get('list', [])
+    if not tickers:
+        raise ValueError(f"Ticker nao encontrado: {par}")
+    return {'last': float(tickers[0]['lastPrice'])}
 
 # ─────────────────────────────────────────────
 # ESTADO GLOBAL
