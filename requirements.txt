@@ -1,0 +1,6 @@
+ccxt
+pandas
+flask
+flask-cors
+requests
+gunicorn
