@@ -12,15 +12,13 @@ from flask_cors import CORS
 from datetime import datetime, time as dtime, timedelta
 
 # ─────────────────────────────────────────────
-# LOGGING — sem emoji, compatível com Windows e Linux
+# LOGGING — compatível com Railway/cloud
 # ─────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s',
     handlers=[
-        logging.FileHandler("bot_trading_v2.log", encoding='utf-8'),
-        logging.StreamHandler(stream=open(sys.stdout.fileno(), mode='w', encoding='utf-8', buffering=1))
-        if hasattr(sys.stdout, 'fileno') else logging.StreamHandler()
+        logging.StreamHandler(sys.stdout),
     ]
 )
 log = logging.getLogger(__name__)
@@ -55,16 +53,19 @@ RSI_PERIODO            = 14
 RSI_SOBRECOMPRADO      = 75
 RSI_SOBREVENDIDO       = 25
 SCORE_MINIMO           = 3
-SANDBOX_MODE           = True
-CAPITAL_SIMULADO       = 100.0      # $100 simulados
-RESERVA_PCT            = 0.20       # 20% do capital em reserva
+SANDBOX_MODE           = True        # True = simulacao, sem ordens reais
+CAPITAL_SIMULADO       = 100.0       # $100 simulados
+RESERVA_PCT            = 0.20        # 20% do capital em reserva
 
 ARQUIVO_ESTADO    = 'estado_bot_v2.json'
 ARQUIVO_HISTORICO = 'historico_trades_v2.json'
 ARQUIVO_RELATORIO = 'relatorio_ia.json'
 
 # ─────────────────────────────────────────────
-# EXCHANGE — Binance Testnet
+# EXCHANGE — Binance real (somente leitura de precos)
+# Ordens sao SIMULADAS internamente — nenhum dinheiro real movimentado
+# O Testnet da Binance bloqueia IPs de datacenter (erro 451),
+# por isso usamos a API publica real apenas para dados de mercado.
 # ─────────────────────────────────────────────
 exchange = ccxt.binance({
     'apiKey': API_KEY,
@@ -72,7 +73,8 @@ exchange = ccxt.binance({
     'enableRateLimit': True,
     'options': {'defaultType': 'spot'}
 })
-exchange.set_sandbox_mode(True)
+# SEM set_sandbox_mode — usa Binance real para dados publicos de preco
+# Ordens nao sao enviadas (ver funcoes comprar/vender abaixo)
 
 # ─────────────────────────────────────────────
 # ESTADO GLOBAL
@@ -520,48 +522,33 @@ def checar_reset_diario():
         )
 
 # ─────────────────────────────────────────────
-# SINCRONIZAR — Saldo real vs simulado
+# INICIALIZAR — Modo simulacao puro (sem fetch_balance)
 # ─────────────────────────────────────────────
 def sincronizar_posicao():
     try:
-        balance    = exchange.fetch_balance()
-        usdt_livre = balance['free'].get('USDT', 0)
-
-        posicoes_validas = {}
-        for par, pos in estado['posicoes'].items():
-            moeda = par.split('/')[0]
-            qtd   = balance['free'].get(moeda, 0) + balance['used'].get(moeda, 0)
-            if qtd * pos['preco_compra'] > 1:
-                posicoes_validas[par] = pos
-                posicoes_validas[par]['quantidade'] = qtd
-                log.info(f"Posicao restaurada: {par} | Compra: ${pos['preco_compra']:.4f}")
-            else:
-                log.info(f"Posicao {par} nao encontrada — removida")
-
-        estado['posicoes'] = posicoes_validas
-
+        # Modo simulacao: nao consulta saldo real na exchange
         if estado['capital_inicial'] is None:
             estado['capital_inicial'] = CAPITAL_SIMULADO
             estado['capital_atual']   = CAPITAL_SIMULADO
             estado['capital_reserva'] = CAPITAL_SIMULADO * RESERVA_PCT
-            log.info(f"MODO SIMULACAO: Capital = ${CAPITAL_SIMULADO:.2f}")
 
-        estado['saldo_usdt'] = usdt_livre
-        estado['saldo_total'] = usdt_livre
-        estado['status']     = 'rodando'
+        estado['saldo_usdt']  = estado['capital_atual']
+        estado['saldo_total'] = estado['capital_atual']
+        estado['status']      = 'rodando'
         salvar_estado()
 
-        log.info(f"Capital: ${estado['capital_atual']:.2f} | Posicoes: {len(estado['posicoes'])}/{MAX_POSICOES}")
+        log.info(f"MODO SIMULACAO | Capital: ${estado['capital_atual']:.2f} | Posicoes: {len(estado['posicoes'])}/{MAX_POSICOES}")
         telegram(
             f"Bot v2 iniciado!\n\n"
-            f"Capital simulado: ${estado['capital_atual']:.2f}\n"
+            f"Modo: SIMULACAO (dados reais Binance, ordens simuladas)\n"
+            f"Capital: ${estado['capital_atual']:.2f}\n"
             f"Reserva: ${estado['capital_reserva']:.2f}\n"
             f"Posicoes abertas: {len(estado['posicoes'])}/{MAX_POSICOES}\n"
             f"Pares: {', '.join(PARES)}\n"
-            f"Timeframe: {TIMEFRAME} | Sandbox: SIM"
+            f"Timeframe: {TIMEFRAME}"
         )
     except Exception as e:
-        log.error(f"Erro ao sincronizar: {e}")
+        log.error(f"Erro ao inicializar: {e}")
         capturar_erro('sincronizar_posicao', e)
 
 # ─────────────────────────────────────────────
@@ -714,7 +701,7 @@ def calcular_score(par):
         }
 
 # ─────────────────────────────────────────────
-# COMPRAR
+# COMPRAR — SIMULADO (sem enviar ordem real)
 # ─────────────────────────────────────────────
 def comprar(par, rsi):
     try:
@@ -723,26 +710,21 @@ def comprar(par, rsi):
         if len(estado['posicoes']) >= MAX_POSICOES:
             return
 
-        ticker   = exchange.fetch_ticker(par)
-        preco    = ticker['last']
-        valor_op = max(estado['capital_atual'] * RISCO_POR_TRADE, CAPITAL_BASE)
+        ticker = exchange.fetch_ticker(par)
+        preco  = ticker['last']
 
-        # Nao investe mais do que o capital disponivel (descontando reserva)
+        valor_op = max(estado['capital_atual'] * RISCO_POR_TRADE, CAPITAL_BASE)
         capital_livre = estado['capital_atual'] - estado['capital_reserva']
         if valor_op > capital_livre:
             valor_op = capital_livre * 0.90
 
         if valor_op < CAPITAL_BASE:
-            log.warning(f"Capital insuficiente para comprar {par}: ${valor_op:.2f} < ${CAPITAL_BASE}")
+            log.warning(f"Capital insuficiente para comprar {par}: ${valor_op:.2f}")
             return
 
-        quantidade = float(exchange.amount_to_precision(par, valor_op / preco))
-        if quantidade <= 0:
-            return
-
-        order             = exchange.create_market_buy_order(par, quantidade)
-        preco_executado   = order.get('average') or order.get('price') or preco
-        quantidade_sim    = valor_op / preco_executado
+        # SIMULADO — registra posicao sem enviar ordem para exchange
+        preco_executado = preco
+        quantidade_sim  = valor_op / preco_executado
 
         estado['posicoes'][par] = {
             'preco_compra': preco_executado,
@@ -753,10 +735,10 @@ def comprar(par, rsi):
         estado['transacoes_dia'] += 1
         salvar_estado()
 
-        log.info(f"COMPROU {par} | ${preco_executado:.4f} | ${valor_op:.2f} | Qtd:{quantidade_sim:.4f} | RSI:{rsi:.1f}")
-        add_evento('COMPRA', f"{par} | ${preco_executado:.4f} | ${valor_op:.2f} | RSI:{rsi:.1f}")
+        log.info(f"[SIM] COMPROU {par} | ${preco_executado:.4f} | ${valor_op:.2f} | Qtd:{quantidade_sim:.4f} | RSI:{rsi:.1f}")
+        add_evento('COMPRA', f"[SIM] {par} | ${preco_executado:.4f} | ${valor_op:.2f} | RSI:{rsi:.1f}")
         telegram(
-            f"COMPRA EXECUTADA\n\n"
+            f"COMPRA SIMULADA\n\n"
             f"Par: {par}\n"
             f"Preco: ${preco_executado:.4f}\n"
             f"Valor: ${valor_op:.2f}\n"
@@ -766,15 +748,12 @@ def comprar(par, rsi):
             f"Posicoes: {len(estado['posicoes'])}/{MAX_POSICOES}\n"
             f"Capital: ${estado['capital_atual']:.2f}"
         )
-    except ccxt.InsufficientFunds:
-        log.error(f"Saldo insuficiente para comprar {par}")
     except Exception as e:
         capturar_erro('comprar', e, par)
         log.error(f"Erro compra {par}: {e}")
-        telegram(f"Erro ao comprar {par}: {e}")
 
 # ─────────────────────────────────────────────
-# COMPRAR COM RESERVA
+# COMPRAR COM RESERVA — SIMULADO
 # ─────────────────────────────────────────────
 def comprar_reserva(par):
     try:
@@ -784,13 +763,9 @@ def comprar_reserva(par):
         ticker        = exchange.fetch_ticker(par)
         preco         = ticker['last']
         valor_reserva = estado['capital_reserva']
-        quantidade    = float(exchange.amount_to_precision(par, valor_reserva / preco))
 
-        if quantidade <= 0:
-            return
-
-        order           = exchange.create_market_buy_order(par, quantidade)
-        preco_executado = order.get('average') or order.get('price') or preco
+        # SIMULADO
+        preco_executado = preco
         quantidade_sim  = valor_reserva / preco_executado
 
         if par in estado['posicoes']:
@@ -841,7 +816,7 @@ def checar_queda_brusca_todos():
         comprar_reserva(melhor_par)
 
 # ─────────────────────────────────────────────
-# VENDER
+# VENDER — SIMULADO (sem enviar ordem real)
 # ─────────────────────────────────────────────
 def vender(par, motivo="SINAL"):
     try:
@@ -849,23 +824,13 @@ def vender(par, motivo="SINAL"):
             return
 
         pos    = estado['posicoes'][par]
-        moeda  = par.split('/')[0]
         ticker = exchange.fetch_ticker(par)
         preco  = ticker['last']
 
         qtd_sim = pos['quantidade']
 
-        balance    = exchange.fetch_balance()
-        saldo_real = balance['free'].get(moeda, 0)
-        qtd_real   = float(exchange.amount_to_precision(par, saldo_real if saldo_real > 0 else qtd_sim))
-
-        if qtd_real <= 0:
-            del estado['posicoes'][par]
-            salvar_estado()
-            return
-
-        order           = exchange.create_market_sell_order(par, qtd_real)
-        preco_executado = order.get('average') or order.get('price') or preco
+        # SIMULADO — usa preco atual de mercado como preco de execucao
+        preco_executado = preco
 
         lucro_pct     = (preco_executado - pos['preco_compra']) / pos['preco_compra'] * 100
         lucro_usd     = (preco_executado - pos['preco_compra']) * qtd_sim
@@ -934,9 +899,6 @@ def vender(par, motivo="SINAL"):
             f"Wins: {estado['wins_dia']} | Losses: {estado['losses_dia']}\n"
             f"Posicoes: {len(estado['posicoes'])}/{MAX_POSICOES}"
         )
-    except ccxt.InsufficientFunds:
-        log.error(f"Saldo insuficiente para vender {par}")
-        capturar_erro('vender_saldo', 'InsufficientFunds', par)
     except Exception as e:
         capturar_erro('vender', e, par)
         log.error(f"Erro venda {par}: {e}")
@@ -1132,14 +1094,9 @@ def rodar_bot():
                     estado['rsi_atual']   = m['rsi']
                     estado['preco_atual'] = m['preco']
 
-                # Atualiza saldo
-                try:
-                    bal  = exchange.fetch_balance()
-                    usdt = bal['free'].get('USDT', 0)
-                    estado['saldo_usdt']  = usdt
-                    estado['saldo_total'] = usdt
-                except:
-                    pass
+                # Atualiza saldo (simulado)
+                estado['saldo_usdt']  = estado['capital_atual']
+                estado['saldo_total'] = estado['capital_atual']
 
             time.sleep(60)
 
