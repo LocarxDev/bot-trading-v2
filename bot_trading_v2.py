@@ -974,7 +974,10 @@ def comprar(par, rsi):
         ticker = fetch_ticker(par)
         preco  = ticker['last']
 
-        valor_op = max(estado['capital_atual'] * RISCO_POR_TRADE, CAPITAL_BASE)
+        capital_total_calc = estado['capital_atual'] + sum(
+            p.get('valor_investido', p['preco_compra'] * p['quantidade']) for p in estado['posicoes'].values()
+        )
+        valor_op = max(capital_total_calc * RISCO_POR_TRADE, CAPITAL_BASE)
         capital_livre = estado['capital_atual'] - estado['capital_reserva']
         if valor_op > capital_livre:
             valor_op = capital_livre * 0.90
