@@ -601,7 +601,8 @@ header{display:flex;align-items:center;gap:12px;padding:16px 0 20px;border-botto
 @media(max-width:680px){.grid-2,.grid-3{grid-template-columns:1fr}}
 .card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px 18px;margin-bottom:0}
 .card-title{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.07em;color:var(--fg2);margin-bottom:14px}
-canvas{display:block;width:100%!important}
+canvas{display:block;width:100%!important;max-height:180px}
+.chart-wrap{position:relative;height:180px;width:100%}
 .tbl-wrap{overflow-x:auto}
 table{width:100%;border-collapse:collapse}
 th{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--fg2);font-weight:600;text-align:left;padding:6px 10px;border-bottom:1px solid var(--border)}
@@ -638,7 +639,7 @@ tr:last-child td{border-bottom:none}tr:hover td{background:var(--surface2)}
   <div class="kpi"><div class="kpi-label">Posições</div><div class="kpi-value neu" id="kpi-pos">—</div><div class="kpi-sub" id="kpi-pos-max">Máx: —</div></div>
 </div>
 <div class="grid-3 mb14">
-  <div class="card"><div class="card-title">Evolução do Capital (USDT)</div><canvas id="chart-capital" height="180"></canvas><div class="state-msg" id="capital-msg" hidden></div></div>
+  <div class="card"><div class="card-title">Evolução do Capital (USDT)</div><div class="chart-wrap"><canvas id="chart-capital"></canvas></div><div class="state-msg" id="capital-msg" hidden></div></div>
   <div class="card"><div class="card-title">Sinais Recentes</div><div class="feed-list" id="feed-list"><div class="state-msg">Carregando…</div></div></div>
 </div>
 <div class="grid-2 mb14">
