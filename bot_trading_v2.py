@@ -42,7 +42,7 @@ PARES = [
 TIMEFRAME              = '1m'
 CAPITAL_BASE           = 10.0       # minimo por ordem
 RISCO_POR_TRADE        = 0.12       # 12% do capital por trade (~$12 de $100)
-MAX_POSICOES           = 4          # maximo de posicoes simultaneas
+MAX_POSICOES           = 6          # maximo de posicoes simultaneas
 STOP_LOSS              = 0.015      # 1.5%
 TRAILING_STOP          = 0.008      # 0.8% padrao
 LUCRO_MINIMO_SAIDA     = 0.008      # 0.8% minimo pra sair com lucro
@@ -684,7 +684,8 @@ function renderCap(h){
   if(capChart)capChart.destroy();
   const lv=values[values.length-1];const gc=lv>=100?'#3fb950':'#f85149';
   const g=ctx.createLinearGradient(0,0,0,180);g.addColorStop(0,gc+'44');g.addColorStop(1,gc+'00');
-  capChart=new Chart(ctx,{type:'line',data:{labels,datasets:[{label:'Capital',data:values,borderColor:gc,borderWidth:2,pointRadius:values.length<20?4:0,pointHoverRadius:6,pointBackgroundColor:gc,pointBorderColor:'#0d1117',pointBorderWidth:2,fill:true,backgroundColor:g,tension:.3}]},options:{responsive:true,maintainAspectRatio:false,animation:{duration:400},plugins:{legend:{display:false},tooltip:{backgroundColor:'#21262d',borderColor:'#30363d',borderWidth:1,titleColor:'#8b949e',bodyColor:'#e6edf3',padding:10,callbacks:{label:c=>' USDT '+fmt(c.parsed.y)}}},scales:{x:{ticks:{color:'#8b949e',font:{size:10},maxTicksLimit:6,maxRotation:0},grid:{color:'#30363d22'}},y:{ticks:{color:'#8b949e',font:{size:10},callback:v=>'U$'+fmt(v,1)},grid:{color:'#30363d55'}}}}});
+  const mn=Math.min(...values),mx=Math.max(...values),pad=Math.max((mx-mn)*0.3,mx*0.005);
+  capChart=new Chart(ctx,{type:'line',data:{labels,datasets:[{label:'Capital',data:values,borderColor:gc,borderWidth:2,pointRadius:values.length<30?5:1,pointHoverRadius:7,pointBackgroundColor:gc,pointBorderColor:'#0d1117',pointBorderWidth:2,fill:true,backgroundColor:g,tension:0}]},options:{responsive:true,maintainAspectRatio:false,animation:{duration:400},plugins:{legend:{display:false},tooltip:{backgroundColor:'#21262d',borderColor:'#30363d',borderWidth:1,titleColor:'#8b949e',bodyColor:'#e6edf3',padding:10,callbacks:{label:c=>' USDT '+fmt(c.parsed.y)}}},scales:{x:{ticks:{color:'#8b949e',font:{size:10},maxTicksLimit:6,maxRotation:0},grid:{color:'#30363d22'}},y:{min:mn-pad,max:mx+pad,ticks:{color:'#8b949e',font:{size:10},callback:v=>'U$'+fmt(v,1)},grid:{color:'#30363d55'}}}}});
 }
 function renderFeed(f){
   const el=document.getElementById('feed-list');const items=(f||[]).slice(0,8);
