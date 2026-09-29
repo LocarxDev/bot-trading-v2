@@ -58,9 +58,14 @@ SANDBOX_MODE           = True        # True = simulacao, sem ordens reais
 CAPITAL_SIMULADO       = 100.0       # $100 simulados
 RESERVA_PCT            = 0.20        # 20% do capital em reserva
 
-ARQUIVO_ESTADO    = 'estado_bot_v2.json'
-ARQUIVO_HISTORICO = 'historico_trades_v2.json'
-ARQUIVO_RELATORIO = 'relatorio_ia.json'
+TAXA_OPERACAO = 0.002   # 0.2% por operacao (compra + venda = 0.4% round trip)
+
+# Usa /data se existir (Railway Volume) para sobreviver redeployments
+import pathlib
+_DATA_DIR = '/data' if pathlib.Path('/data').exists() else '.'
+ARQUIVO_ESTADO    = f'{_DATA_DIR}/estado_bot_v2.json'
+ARQUIVO_HISTORICO = f'{_DATA_DIR}/historico_trades_v2.json'
+ARQUIVO_RELATORIO = f'{_DATA_DIR}/relatorio_ia.json'
 
 # ─────────────────────────────────────────────
 # KRAKEN REST API PUBLICA — sem autenticacao, sem bloqueio de datacenter
@@ -448,23 +453,33 @@ def get_status():
     total   = estado['wins_dia'] + estado['losses_dia']
     winrate = (estado['wins_dia'] / total * 100) if total > 0 else 0
 
-    pnl_total_usd = 0.0
-    posicoes_info = {}
+    valor_posicoes = 0.0
+    posicoes_info  = {}
     for par, pos in estado['posicoes'].items():
-        preco_atual = estado['pares_detalhes'].get(par, {}).get('preco', pos['preco_compra'])
-        pnl_pct = (preco_atual - pos['preco_compra']) / pos['preco_compra'] * 100
-        pnl_usd = (preco_atual - pos['preco_compra']) * pos['quantidade']
-        pnl_total_usd += pnl_usd
+        preco_atual     = estado['pares_detalhes'].get(par, {}).get('preco', pos['preco_compra'])
+        valor_investido = pos.get('valor_investido', pos['preco_compra'] * pos['quantidade'])
+        receita_atual   = preco_atual * pos['quantidade'] * (1 - TAXA_OPERACAO)
+        pnl_usdt        = receita_atual - valor_investido
+        pnl_pct         = (pnl_usdt / valor_investido) * 100 if valor_investido else 0
+        valor_posicoes += receita_atual
         posicoes_info[par] = {
-            'preco_compra': round(pos['preco_compra'], 6),
-            'preco_atual':  round(preco_atual, 6),
-            'preco_pico':   round(pos.get('preco_pico', pos['preco_compra']), 6),
-            'quantidade':   round(pos['quantidade'], 6),
-            'pnl_pct':      round(pnl_pct, 2),
-            'pnl_usd':      round(pnl_usd, 2),
-            'total_invest': round(pos['preco_compra'] * pos['quantidade'], 2),
-            'entrada':      pos.get('entrada', ''),
+            'preco_entrada': round(pos.get('preco_entrada', pos['preco_compra']), 6),
+            'preco_compra':  round(pos['preco_compra'], 6),
+            'preco_atual':   round(preco_atual, 6),
+            'preco_pico':    round(pos.get('preco_pico', pos['preco_compra']), 6),
+            'stop_loss':     round(pos.get('stop_loss', pos['preco_compra'] * (1-STOP_LOSS)), 6),
+            'quantidade':    round(pos['quantidade'], 6),
+            'valor_investido': round(valor_investido, 4),
+            'pnl_pct':       round(pnl_pct, 2),
+            'pnl_usdt':      round(pnl_usdt, 4),
+            'abertura':      pos.get('abertura', pos.get('entrada', '')),
+            'entrada':       pos.get('entrada', ''),
         }
+
+    capital_disponivel = round(estado['capital_atual'], 2)
+    capital_total      = round(estado['capital_atual'] + valor_posicoes, 2)
+    capital_inicial    = round(estado['capital_inicial'] or CAPITAL_SIMULADO, 2)
+    pnl_total          = round(capital_total - capital_inicial, 2)
 
     return jsonify({
         'versao':            'v2',
@@ -474,20 +489,25 @@ def get_status():
         'posicoes':          posicoes_info,
         'num_posicoes':      len(estado['posicoes']),
         'max_posicoes':      MAX_POSICOES,
-        'pnl_total_usd':     round(pnl_total_usd, 2),
+        'pnl_total':         pnl_total,
+        'pnl_total_usd':     pnl_total,
         'pares_detalhes':    estado['pares_detalhes'],
         'pares_monitorados': PARES,
         'scores':            estado['scores'],
-        'capital_inicial':   round(estado['capital_inicial'] or CAPITAL_SIMULADO, 2),
-        'capital_atual':     round(estado['capital_atual'], 2),
+        'capital_inicial':   capital_inicial,
+        'capital_atual':     capital_total,        # total = disponivel + posicoes abertas
+        'capital_disponivel': capital_disponivel,  # so o USDT em caixa
         'capital_reserva':   round(estado['capital_reserva'], 2),
         'reserva_usada':     int(estado['reserva_usada']),
         'lucros_dia':        round(estado['lucros_dia'], 2),
         'perdas_dia':        round(abs(estado['perdas_dia']), 2),
         'resultado_dia':     round(estado['lucros_dia'] - abs(estado['perdas_dia']), 2),
         'transacoes_dia':    estado['transacoes_dia'],
+        'total_trades':      estado['transacoes_dia'],
         'wins_dia':          estado['wins_dia'],
         'losses_dia':        estado['losses_dia'],
+        'trades_lucro':      estado['wins_dia'],
+        'trades_stop':       estado['losses_dia'],
         'winrate':           round(winrate, 1),
         'sinal_atual':       estado['sinal_atual'],
         'rsi_atual':         round(float(estado['rsi_atual']), 1),
@@ -506,11 +526,40 @@ def get_historico():
 
 @app.route('/feed')
 def get_feed():
-    return jsonify(list(reversed(feed_eventos[-50:])))
+    # Retorna sinais dos pares no formato que o dashboard espera
+    sinais = []
+    for par in PARES:
+        det   = estado['pares_detalhes'].get(par, {})
+        score = estado['scores'].get(par, 0)
+        sinal = 'COMPRA' if score >= SCORE_MINIMO else 'NEUTRO'
+        sinais.append({
+            'par':   par,
+            'preco': det.get('preco', 0),
+            'rsi':   det.get('rsi', 0),
+            'score': score,
+            'sinal': sinal,
+        })
+    sinais.sort(key=lambda x: x['score'], reverse=True)
+    return jsonify(sinais)
 
 @app.route('/stats')
 def get_stats():
+    total_trades = estado['wins_dia'] + estado['losses_dia']
+    # P&L por par a partir do historico
+    pares_stats = {}
+    for t in historico:
+        p = t.get('par','')
+        if p not in pares_stats:
+            pares_stats[p] = {'pnl_total': 0.0, 'total': 0}
+        pares_stats[p]['pnl_total'] += t.get('pnl_usdt', t.get('pnl_usd', 0))
+        pares_stats[p]['total']     += 1
     return jsonify({
+        'total_trades':   total_trades,
+        'trades_lucro':   estado['wins_dia'],
+        'trades_stop':    estado['losses_dia'],
+        'capital_atual':  round(estado['capital_atual'], 2),
+        'pnl_total':      round(estado['lucros_dia'] - abs(estado['perdas_dia']), 2),
+        'pares':          pares_stats,
         'stats_pares':    estado['stats_pares'],
         'stats_horarios': estado['stats_horarios'],
         'aprendizados':   estado['aprendizados'],
@@ -933,29 +982,38 @@ def comprar(par, rsi):
 
         # SIMULADO — registra posicao sem enviar ordem para exchange
         preco_executado = preco
-        quantidade_sim  = valor_op / preco_executado
+        taxa_compra     = valor_op * TAXA_OPERACAO
+        valor_liquido   = valor_op - taxa_compra
+        quantidade_sim  = valor_liquido / preco_executado
+
+        estado['capital_atual'] -= valor_op          # desconta USDT gasto
+        stop_price = preco_executado * (1 - STOP_LOSS)
 
         estado['posicoes'][par] = {
-            'preco_compra': preco_executado,
-            'quantidade':   quantidade_sim,
-            'preco_pico':   preco_executado,
-            'entrada':      datetime.now().strftime('%d/%m %H:%M'),
+            'preco_compra':    preco_executado,
+            'preco_entrada':   preco_executado,
+            'quantidade':      quantidade_sim,
+            'valor_investido': valor_liquido,
+            'preco_pico':      preco_executado,
+            'stop_loss':       round(stop_price, 6),
+            'entrada':         datetime.now().strftime('%d/%m %H:%M'),
+            'abertura':        datetime.now().isoformat(),
         }
         estado['transacoes_dia'] += 1
         salvar_estado()
 
-        log.info(f"[SIM] COMPROU {par} | ${preco_executado:.4f} | ${valor_op:.2f} | Qtd:{quantidade_sim:.4f} | RSI:{rsi:.1f}")
+        log.info(f"[SIM] COMPROU {par} | ${preco_executado:.4f} | ${valor_op:.2f} | Taxa:${taxa_compra:.3f} | Qtd:{quantidade_sim:.4f} | RSI:{rsi:.1f}")
         add_evento('COMPRA', f"[SIM] {par} | ${preco_executado:.4f} | ${valor_op:.2f} | RSI:{rsi:.1f}")
         telegram(
             f"COMPRA SIMULADA\n\n"
             f"Par: {par}\n"
             f"Preco: ${preco_executado:.4f}\n"
-            f"Valor: ${valor_op:.2f}\n"
+            f"Valor: ${valor_op:.2f} (taxa: ${taxa_compra:.3f})\n"
             f"Qtd: {quantidade_sim:.6f}\n"
             f"RSI: {rsi:.1f}\n"
-            f"Stop: ${preco_executado*(1-STOP_LOSS):.4f}\n"
+            f"Stop: ${stop_price:.4f}\n"
             f"Posicoes: {len(estado['posicoes'])}/{MAX_POSICOES}\n"
-            f"Capital: ${estado['capital_atual']:.2f}"
+            f"Capital disp: ${estado['capital_atual']:.2f}"
         )
     except Exception as e:
         capturar_erro('comprar', e, par)
@@ -975,21 +1033,31 @@ def comprar_reserva(par):
 
         # SIMULADO
         preco_executado = preco
-        quantidade_sim  = valor_reserva / preco_executado
+        taxa_reserva    = valor_reserva * TAXA_OPERACAO
+        valor_liq_res   = valor_reserva - taxa_reserva
+        quantidade_sim  = valor_liq_res / preco_executado
 
         if par in estado['posicoes']:
-            pos       = estado['posicoes'][par]
-            qtd_total = pos['quantidade'] + quantidade_sim
-            pm        = ((pos['preco_compra'] * pos['quantidade']) +
-                         (preco_executado * quantidade_sim)) / qtd_total
-            estado['posicoes'][par]['preco_compra'] = pm
-            estado['posicoes'][par]['quantidade']   = qtd_total
+            pos          = estado['posicoes'][par]
+            qtd_total    = pos['quantidade'] + quantidade_sim
+            val_total    = pos.get('valor_investido', pos['preco_compra']*pos['quantidade']) + valor_liq_res
+            pm           = ((pos['preco_compra'] * pos['quantidade']) +
+                            (preco_executado * quantidade_sim)) / qtd_total
+            estado['posicoes'][par]['preco_compra']    = pm
+            estado['posicoes'][par]['preco_entrada']   = pm
+            estado['posicoes'][par]['quantidade']      = qtd_total
+            estado['posicoes'][par]['valor_investido'] = val_total
+            estado['posicoes'][par]['stop_loss']       = round(pm * (1 - STOP_LOSS), 6)
         else:
             estado['posicoes'][par] = {
-                'preco_compra': preco_executado,
-                'quantidade':   quantidade_sim,
-                'preco_pico':   preco_executado,
-                'entrada':      datetime.now().strftime('%d/%m %H:%M'),
+                'preco_compra':    preco_executado,
+                'preco_entrada':   preco_executado,
+                'quantidade':      quantidade_sim,
+                'valor_investido': valor_liq_res,
+                'preco_pico':      preco_executado,
+                'stop_loss':       round(preco_executado * (1 - STOP_LOSS), 6),
+                'entrada':         datetime.now().strftime('%d/%m %H:%M'),
+                'abertura':        datetime.now().isoformat(),
             }
 
         estado['reserva_usada']   = True
@@ -1041,27 +1109,35 @@ def vender(par, motivo="SINAL"):
         # SIMULADO — usa preco atual de mercado como preco de execucao
         preco_executado = preco
 
-        lucro_pct     = (preco_executado - pos['preco_compra']) / pos['preco_compra'] * 100
-        lucro_usd     = (preco_executado - pos['preco_compra']) * qtd_sim
-        taxa          = (pos['preco_compra'] * qtd_sim) * 0.002
-        lucro_liquido = lucro_usd - taxa
+        receita_bruta   = preco_executado * qtd_sim
+        taxa_venda      = receita_bruta * TAXA_OPERACAO
+        receita_liquida = receita_bruta - taxa_venda
+        valor_investido = pos.get('valor_investido', pos['preco_compra'] * qtd_sim)
+        lucro_liquido   = receita_liquida - valor_investido
+        lucro_pct       = (lucro_liquido / valor_investido) * 100
 
+        now_str = datetime.now().isoformat()
         historico.append({
-            'data':         datetime.now().strftime('%d/%m %H:%M'),
             'par':          par,
-            'tipo':         motivo,
-            'preco_compra': round(pos['preco_compra'], 6),
-            'preco_venda':  round(preco_executado, 6),
+            'tipo':         'COMPRA',
+            'motivo_saida': motivo,
+            'preco_entrada': round(pos.get('preco_entrada', pos['preco_compra']), 6),
+            'preco_saida':  round(preco_executado, 6),
             'quantidade':   round(qtd_sim, 6),
+            'valor_investido': round(valor_investido, 4),
+            'receita':      round(receita_liquida, 4),
+            'taxa_total':   round(taxa_venda + valor_investido * TAXA_OPERACAO, 4),
             'pnl_pct':      round(lucro_pct, 2),
-            'pnl_usd':      round(lucro_liquido, 2),
+            'pnl_usdt':     round(lucro_liquido, 4),
             'resultado':    'win' if lucro_liquido >= 0 else 'loss',
-            'entrada':      pos.get('entrada', ''),
+            'abertura':     pos.get('abertura', now_str),
+            'fechamento':   now_str,
+            'data':         datetime.now().strftime('%d/%m %H:%M'),
         })
         salvar_historico()
 
         del estado['posicoes'][par]
-        estado['capital_atual'] += lucro_liquido
+        estado['capital_atual'] += receita_liquida   # soma receita completa (nao so lucro)
         nova_reserva = estado['capital_atual'] * RESERVA_PCT
         estado['capital_reserva'] = nova_reserva
         if not estado['posicoes']:
