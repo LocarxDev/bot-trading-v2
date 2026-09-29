@@ -635,7 +635,7 @@ tr:last-child td{border-bottom:none}tr:hover td{background:var(--surface2)}
   <div class="kpi"><div class="kpi-label">P&amp;L Total</div><div class="kpi-value" id="kpi-pnl">—</div><div class="kpi-sub" id="kpi-pnl-sub"></div></div>
   <div class="kpi"><div class="kpi-label">Trades</div><div class="kpi-value" id="kpi-trades">—</div><div class="kpi-sub" id="kpi-trades-sub"></div></div>
   <div class="kpi"><div class="kpi-label">Win Rate</div><div class="kpi-value" id="kpi-wr">—</div><div class="kpi-sub" id="kpi-wr-sub"></div></div>
-  <div class="kpi"><div class="kpi-label">Posições</div><div class="kpi-value neu" id="kpi-pos">—</div><div class="kpi-sub">Máx: 4</div></div>
+  <div class="kpi"><div class="kpi-label">Posições</div><div class="kpi-value neu" id="kpi-pos">—</div><div class="kpi-sub" id="kpi-pos-max">Máx: —</div></div>
 </div>
 <div class="grid-3 mb14">
   <div class="card"><div class="card-title">Evolução do Capital (USDT)</div><canvas id="chart-capital" height="180"></canvas><div class="state-msg" id="capital-msg" hidden></div></div>
@@ -672,6 +672,7 @@ function renderKPIs(s,st){
   const we=document.getElementById('kpi-wr');we.textContent=wr!=null?fmt(wr,1)+'%':'—';we.className='kpi-value '+(wr>=55?'pos':wr<45?'neg':'neu');
   document.getElementById('kpi-wr-sub').textContent=wr!=null?venced+' de '+trades+' ganhos':'Sem trades ainda';
   document.getElementById('kpi-pos').textContent=posA;
+  document.getElementById('kpi-pos-max').textContent='Máx: '+(s?.max_posicoes??'—');
 }
 function renderCap(h){
   const ctx=document.getElementById('chart-capital').getContext('2d');
