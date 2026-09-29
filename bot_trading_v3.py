@@ -5,8 +5,6 @@ import os, json, time, threading, logging, pathlib
 from datetime import datetime, timedelta
 import pandas as pd
 import requests
-import ccxt
-
 from flask import Flask, jsonify
 from flask_cors import CORS
 
@@ -105,8 +103,6 @@ _eventos  = []
 # ─────────────────────────────────────────────
 # EXCHANGE (Kraken — dados reais, sem chaves)
 # ─────────────────────────────────────────────
-exchange = ccxt.kraken({'enableRateLimit': True})
-
 def fetch_ohlcv(par, interval='5m', limit=288):
     tf_map = {'1m': 1, '5m': 5, '15m': 15, '30m': 30, '1h': 60, '4h': 240, '1d': 1440}
     minutes = tf_map.get(interval, 5)
