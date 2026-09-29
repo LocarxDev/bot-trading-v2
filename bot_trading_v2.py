@@ -523,16 +523,163 @@ def get_relatorio():
     rel = gerar_relatorio_ia()
     return jsonify(rel)
 
+DASHBOARD_HTML = r"""<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Trading Bot v2</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+:root{--bg:#0d1117;--surface:#161b22;--surface2:#21262d;--border:#30363d;--fg:#e6edf3;--fg2:#8b949e;--accent:#58a6ff;--green:#3fb950;--green-dim:#1a4a26;--red:#f85149;--red-dim:#4a1a1a;color-scheme:dark}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--fg);font-family:'Inter',system-ui,sans-serif;font-size:14px;line-height:1.5;padding:0 16px 32px;min-height:100vh}
+header{display:flex;align-items:center;gap:12px;padding:16px 0 20px;border-bottom:1px solid var(--border);margin-bottom:20px}
+.logo{font-size:20px;font-weight:700;letter-spacing:-.5px}.logo span{color:var(--accent)}
+.badge{font-size:11px;font-weight:600;padding:2px 8px;border-radius:20px;background:var(--green-dim);color:var(--green);display:flex;align-items:center;gap:5px}
+.badge::before{content:'';width:6px;height:6px;border-radius:50%;background:var(--green);display:inline-block;animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+.badge.offline{background:var(--red-dim);color:var(--red)}.badge.offline::before{background:var(--red);animation:none}
+.refresh-btn{margin-left:auto;background:var(--surface2);border:1px solid var(--border);color:var(--fg2);padding:6px 14px;border-radius:6px;font-size:12px;font-family:inherit;cursor:pointer;display:flex;align-items:center;gap:6px;transition:color .15s,border-color .15s}
+.refresh-btn:hover{color:var(--fg);border-color:var(--accent)}
+.last-update{font-size:11px;color:var(--fg2)}
+.kpi-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:20px}
+.kpi{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px 18px}
+.kpi-label{font-size:11px;color:var(--fg2);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px}
+.kpi-value{font-size:24px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1.1}
+.kpi-sub{font-size:11px;color:var(--fg2);margin-top:4px}
+.pos{color:var(--green)}.neg{color:var(--red)}.neu{color:var(--accent)}
+.grid-2{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px}
+.grid-3{display:grid;grid-template-columns:2fr 1fr;gap:14px;margin-bottom:14px}
+@media(max-width:680px){.grid-2,.grid-3{grid-template-columns:1fr}}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px 18px;margin-bottom:0}
+.card-title{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.07em;color:var(--fg2);margin-bottom:14px}
+canvas{display:block;width:100%!important}
+.tbl-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse}
+th{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--fg2);font-weight:600;text-align:left;padding:6px 10px;border-bottom:1px solid var(--border)}
+td{padding:8px 10px;border-bottom:1px solid var(--border);font-size:13px;font-variant-numeric:tabular-nums}
+tr:last-child td{border-bottom:none}tr:hover td{background:var(--surface2)}
+.feed-list{display:flex;flex-direction:column;gap:8px}
+.feed-item{display:grid;grid-template-columns:70px 1fr auto auto;gap:8px;align-items:center;background:var(--surface2);border-radius:8px;padding:8px 10px;font-size:12px}
+.feed-par{font-weight:700;font-size:12px}.feed-info{color:var(--fg2)}.feed-score{font-weight:600}
+.pill{font-size:10px;font-weight:700;padding:2px 7px;border-radius:10px;text-transform:uppercase;letter-spacing:.04em}
+.pill-compra{background:var(--green-dim);color:var(--green)}.pill-venda{background:var(--red-dim);color:var(--red)}.pill-neutro{background:#21262d;color:var(--fg2)}
+.pair-bar-list{display:flex;flex-direction:column;gap:8px}
+.pair-row{display:flex;align-items:center;gap:8px;font-size:12px}
+.pair-name{width:72px;font-weight:600;color:var(--fg);flex-shrink:0}
+.bar-track{flex:1;height:8px;background:var(--surface2);border-radius:4px;overflow:hidden}
+.bar-fill{height:100%;border-radius:4px;transition:width .4s ease}
+.pair-val{width:60px;text-align:right;font-variant-numeric:tabular-nums;font-family:'JetBrains Mono',monospace;font-size:11px}
+.pos-list{display:flex;flex-direction:column;gap:8px}
+.pos-item{border-radius:8px;padding:10px 12px;border:1px solid var(--border);display:grid;grid-template-columns:1fr auto auto;gap:6px 12px;align-items:center}
+.pos-par{font-weight:700}.pos-meta{color:var(--fg2);font-size:11px;grid-column:1/-1}
+.state-msg{color:var(--fg2);font-size:13px;text-align:center;padding:32px 0}
+.mb14{margin-bottom:14px}
+</style></head><body>
+<header>
+  <div class="logo">Trading <span>v2</span></div>
+  <div class="badge offline" id="status-badge">Conectando…</div>
+  <span class="last-update" id="last-update"></span>
+  <button class="refresh-btn" onclick="fetchAll()">&#x21bb; Atualizar</button>
+</header>
+<div class="kpi-row">
+  <div class="kpi"><div class="kpi-label">Capital</div><div class="kpi-value neu" id="kpi-capital">—</div><div class="kpi-sub">Início: USDT 100,00</div></div>
+  <div class="kpi"><div class="kpi-label">P&amp;L Total</div><div class="kpi-value" id="kpi-pnl">—</div><div class="kpi-sub" id="kpi-pnl-sub"></div></div>
+  <div class="kpi"><div class="kpi-label">Trades</div><div class="kpi-value" id="kpi-trades">—</div><div class="kpi-sub" id="kpi-trades-sub"></div></div>
+  <div class="kpi"><div class="kpi-label">Win Rate</div><div class="kpi-value" id="kpi-wr">—</div><div class="kpi-sub" id="kpi-wr-sub"></div></div>
+  <div class="kpi"><div class="kpi-label">Posições</div><div class="kpi-value neu" id="kpi-pos">—</div><div class="kpi-sub">Máx: 4</div></div>
+</div>
+<div class="grid-3 mb14">
+  <div class="card"><div class="card-title">Evolução do Capital (USDT)</div><canvas id="chart-capital" height="180"></canvas><div class="state-msg" id="capital-msg" hidden></div></div>
+  <div class="card"><div class="card-title">Sinais Recentes</div><div class="feed-list" id="feed-list"><div class="state-msg">Carregando…</div></div></div>
+</div>
+<div class="grid-2 mb14">
+  <div class="card"><div class="card-title">P&amp;L por Par</div><div class="pair-bar-list" id="pair-bars"><div class="state-msg">Carregando…</div></div></div>
+  <div class="card"><div class="card-title">Posições Abertas</div><div class="pos-list" id="pos-list"><div class="state-msg">Nenhuma posição aberta</div></div></div>
+</div>
+<div class="card">
+  <div class="card-title">Últimas Operações</div>
+  <div class="tbl-wrap"><table><thead><tr><th>Par</th><th>Tipo</th><th>Entrada</th><th>Saída</th><th>P&amp;L</th><th>P&amp;L %</th><th>Motivo</th><th>Abertura</th></tr></thead>
+  <tbody id="hist-body"><tr><td colspan="8" style="text-align:center;color:var(--fg2);padding:24px">Carregando…</td></tr></tbody></table></div>
+</div>
+<script>
+let capChart=null;
+function fmt(n,d=2){if(n==null||isNaN(n))return'—';return Number(n).toLocaleString('pt-BR',{minimumFractionDigits:d,maximumFractionDigits:d})}
+function fmtPct(n){if(n==null||isNaN(n))return'—';return(n>=0?'+':'')+fmt(n)+'%'}
+function cc(n){return n>0?'pos':n<0?'neg':''}
+function ts(iso){if(!iso)return'—';try{return new Date(iso).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})}catch{return iso}}
+function setOnline(ok){const b=document.getElementById('status-badge');if(ok){b.textContent='Rodando';b.className='badge'}else{b.textContent='Offline';b.className='badge offline'}}
+function renderKPIs(s,st){
+  const cap=s?.capital_atual??st?.capital_atual??100;
+  const pnl=s?.pnl_total??st?.pnl_total??0;
+  const trades=st?.total_trades??s?.total_trades??0;
+  const venced=st?.trades_lucro??0;const perdeu=st?.trades_stop??0;
+  const wr=trades>0?(venced/trades*100):null;
+  const posA=Object.keys(s?.posicoes??{}).length;
+  document.getElementById('kpi-capital').textContent='USDT '+fmt(cap);
+  const pe=document.getElementById('kpi-pnl');pe.textContent=(pnl>=0?'+':'')+fmt(pnl)+' USDT';pe.className='kpi-value '+cc(pnl);
+  document.getElementById('kpi-pnl-sub').textContent=fmtPct((cap-100));
+  document.getElementById('kpi-trades').textContent=trades;
+  document.getElementById('kpi-trades-sub').textContent=venced+' lucro · '+perdeu+' stop';
+  const we=document.getElementById('kpi-wr');we.textContent=wr!=null?fmt(wr,1)+'%':'—';we.className='kpi-value '+(wr>=55?'pos':wr<45?'neg':'neu');
+  document.getElementById('kpi-wr-sub').textContent=wr!=null?venced+' de '+trades+' ganhos':'Sem trades ainda';
+  document.getElementById('kpi-pos').textContent=posA;
+}
+function renderCap(h){
+  const ctx=document.getElementById('chart-capital').getContext('2d');
+  const closed=(h||[]).filter(x=>x.preco_saida).sort((a,b)=>new Date(a.abertura)-new Date(b.abertura));
+  const labels=['Início'];const values=[100];let r=100;
+  closed.forEach(t=>{r+=(t.pnl_usdt??0);labels.push(ts(t.fechamento||t.abertura));values.push(parseFloat(r.toFixed(4)))});
+  const msg=document.getElementById('capital-msg');
+  if(values.length<=1){document.getElementById('chart-capital').hidden=true;msg.textContent='Nenhuma operação fechada ainda';msg.hidden=false;return}
+  document.getElementById('chart-capital').hidden=false;msg.hidden=true;
+  if(capChart)capChart.destroy();
+  const lv=values[values.length-1];const gc=lv>=100?'#3fb950':'#f85149';
+  const g=ctx.createLinearGradient(0,0,0,180);g.addColorStop(0,gc+'44');g.addColorStop(1,gc+'00');
+  capChart=new Chart(ctx,{type:'line',data:{labels,datasets:[{label:'Capital',data:values,borderColor:gc,borderWidth:2,pointRadius:values.length<20?4:0,pointHoverRadius:6,pointBackgroundColor:gc,pointBorderColor:'#0d1117',pointBorderWidth:2,fill:true,backgroundColor:g,tension:.3}]},options:{responsive:true,maintainAspectRatio:false,animation:{duration:400},plugins:{legend:{display:false},tooltip:{backgroundColor:'#21262d',borderColor:'#30363d',borderWidth:1,titleColor:'#8b949e',bodyColor:'#e6edf3',padding:10,callbacks:{label:c=>' USDT '+fmt(c.parsed.y)}}},scales:{x:{ticks:{color:'#8b949e',font:{size:10},maxTicksLimit:6,maxRotation:0},grid:{color:'#30363d22'}},y:{ticks:{color:'#8b949e',font:{size:10},callback:v=>'U$'+fmt(v,1)},grid:{color:'#30363d55'}}}}});
+}
+function renderFeed(f){
+  const el=document.getElementById('feed-list');const items=(f||[]).slice(0,8);
+  if(!items.length){el.innerHTML='<div class="state-msg">Sem sinais ainda</div>';return}
+  el.innerHTML=items.map(x=>{const sig=(x.sinal||'NEUTRO').toUpperCase();const cls=sig==='COMPRA'?'pill-compra':sig==='VENDA'?'pill-venda':'pill-neutro';return`<div class="feed-item"><span class="feed-par">${x.par||'—'}</span><span class="feed-info">U$ ${fmt(x.preco,4)} · RSI ${fmt(x.rsi,1)}</span><span class="feed-score" style="color:var(--accent)">Score ${x.score??'?'}</span><span class="pill ${cls}">${sig}</span></div>`}).join('');
+}
+function renderBars(st){
+  const el=document.getElementById('pair-bars');const pares=st?.pares||{};
+  const entries=Object.entries(pares).map(([p,d])=>({p,pnl:d.pnl_total??0})).sort((a,b)=>Math.abs(b.pnl)-Math.abs(a.pnl));
+  if(!entries.length){el.innerHTML='<div class="state-msg">Sem dados ainda</div>';return}
+  const max=Math.max(...entries.map(e=>Math.abs(e.pnl)),.01);
+  el.innerHTML=entries.map(e=>{const col=e.pnl>=0?'var(--green)':'var(--red)';const pct=(Math.abs(e.pnl)/max)*100;return`<div class="pair-row"><span class="pair-name">${e.p.replace('/USDT','')}</span><div class="bar-track"><div class="bar-fill" style="width:${pct}%;background:${col}"></div></div><span class="pair-val" style="color:${col}">${e.pnl>=0?'+':''}${fmt(e.pnl)}</span></div>`}).join('');
+}
+function renderPos(s){
+  const el=document.getElementById('pos-list');const pos=s?.posicoes||{};const entries=Object.entries(pos);
+  if(!entries.length){el.innerHTML='<div class="state-msg">Nenhuma posição aberta</div>';return}
+  el.innerHTML=entries.map(([par,p])=>{const pu=p.pnl_usdt??0;return`<div class="pos-item"><span class="pos-par">${par}</span><span class="${cc(pu)}" style="font-weight:700">${pu>=0?'+':''}${fmt(pu)} USDT</span><span class="${cc(pu)}" style="font-size:12px">${fmtPct(p.pnl_pct??0)}</span><span class="pos-meta">Entrada: U$ ${fmt(p.preco_entrada,4)} · Stop: U$ ${fmt(p.stop_loss,4)} · ${ts(p.abertura)}</span></div>`}).join('');
+}
+function renderHist(h){
+  const tbody=document.getElementById('hist-body');const rows=(h||[]).slice(0,30);
+  if(!rows.length){tbody.innerHTML='<tr><td colspan="8" style="text-align:center;color:var(--fg2);padding:24px">Sem histórico ainda</td></tr>';return}
+  tbody.innerHTML=rows.map(r=>{const pnl=r.pnl_usdt??0;const cls=cc(pnl);return`<tr><td style="font-weight:600">${r.par}</td><td><span class="pill ${r.tipo==='COMPRA'?'pill-compra':'pill-venda'}">${r.tipo||'—'}</span></td><td style="font-family:'JetBrains Mono',monospace;font-size:12px">U$ ${fmt(r.preco_entrada,4)}</td><td style="font-family:'JetBrains Mono',monospace;font-size:12px">${r.preco_saida?'U$ '+fmt(r.preco_saida,4):'<span style="color:var(--fg2)">Aberta</span>'}</td><td class="${cls}" style="font-weight:600">${pnl>=0?'+':''}${fmt(pnl)}</td><td class="${cls}">${fmtPct(r.pnl_pct??0)}</td><td style="color:var(--fg2);font-size:12px">${r.motivo_saida||'—'}</td><td style="color:var(--fg2);font-size:12px">${ts(r.abertura)}</td></tr>`}).join('');
+}
+async function fetchAll(){
+  document.getElementById('last-update').textContent='Atualizando…';
+  try{
+    const [s,h,f,st]=await Promise.allSettled([fetch('/status').then(r=>r.json()),fetch('/historico').then(r=>r.json()),fetch('/feed').then(r=>r.json()),fetch('/stats').then(r=>r.json())]);
+    const sv=s.status==='fulfilled'?s.value:null;
+    const hv=h.status==='fulfilled'?(Array.isArray(h.value)?h.value:h.value?.historico||[]):[];
+    const fv=f.status==='fulfilled'?(Array.isArray(f.value)?f.value:f.value?.feed||[]):[];
+    const stv=st.status==='fulfilled'?st.value:null;
+    setOnline(!!sv);
+    if(sv||stv)renderKPIs(sv,stv);
+    renderCap(hv);renderFeed(fv);renderBars(stv);renderPos(sv);renderHist(hv);
+    document.getElementById('last-update').textContent='Atualizado às '+new Date().toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+  }catch(e){setOnline(false);document.getElementById('last-update').textContent='Erro ao conectar'}
+}
+fetchAll();setInterval(fetchAll,30000);
+</script></body></html>"""
+
 @app.route('/')
 def index():
-    return jsonify({
-        'bot': 'Trading v2',
-        'status': estado.get('status', 'rodando'),
-        'capital_atual': round(estado.get('capital_atual', 0), 2),
-        'posicoes_abertas': len(estado.get('posicoes', {})),
-        'total_trades': estado.get('total_trades', 0),
-        'endpoints': ['/status', '/historico', '/feed', '/stats', '/relatorio', '/health']
-    })
+    from flask import Response
+    return Response(DASHBOARD_HTML, mimetype='text/html')
 
 @app.route('/health')
 def health():
