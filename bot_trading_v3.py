@@ -50,7 +50,7 @@ RSI_SOBREVENDIDO   = 28
 SCORE_MINIMO       = 3          # base, ajustado pelo ML
 SCORE_MINIMO_MIN   = 2
 SCORE_MINIMO_MAX   = 6
-SCORE_SHORT_MIN    = 3          # mínimo para abrir SHORT
+SCORE_SHORT_MIN    = 5          # mínimo para abrir SHORT (mais seletivo)
 
 PARES = [
     'BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'BNB/USDT',
@@ -396,8 +396,24 @@ def calcular_score(par):
         elif rsi_val < RSI_SOBREVENDIDO:
             score_short -= 3; sinal_short = 'NEUTRO'
 
+        # Filtro: tendência 1h alta cancela SHORT
         if tendencia_alta_1h and sinal_short == 'SHORT':
-            score_short -= 2
+            score_short -= 3
+
+        # Filtro extra: se BTC está em tendência de alta, bloqueia SHORT em altcoins
+        if par != 'BTC/USDT' and sinal_short == 'SHORT':
+            try:
+                df_btc = fetch_ohlcv('BTC/USDT', interval='1h', limit=50)
+                df_btc['ma20'] = df_btc['close'].rolling(20).mean()
+                btc_alta = float(df_btc['close'].iloc[-1]) > float(df_btc['ma20'].iloc[-1])
+                if btc_alta:
+                    score_short -= 2  # mercado em alta geral = SHORT arriscado
+            except:
+                pass
+
+        # RSI da altcoin precisa estar claramente sobrecomprado para SHORT
+        if sinal_short == 'SHORT' and rsi_val < 70:
+            score_short -= 2  # sem RSI alto, sinal fraco
 
         if sinal_short == 'SHORT' and score_short < SCORE_SHORT_MIN:
             sinal_short = 'NEUTRO'
@@ -1021,8 +1037,8 @@ function setOnline(ok){const b=document.getElementById('status-badge');if(ok){b.
 function renderKPIs(s,st){
   const cap=s?.capital_atual??100;
   const pnl=s?.pnl_total??0;
-  const trades=s?.total_trades??0;
   const venced=s?.wins_dia??0;const perdeu=s?.losses_dia??0;
+  const trades=venced+perdeu;
   const wr=trades>0?(venced/trades*100):null;
   const posA=Object.keys(s?.posicoes??{}).length;
   const longA=Object.values(s?.posicoes??{}).filter(p=>p.tipo==='LONG').length;
