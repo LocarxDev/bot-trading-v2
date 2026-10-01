@@ -128,7 +128,10 @@ def fetch_ticker(par):
         raise Exception(f"Kraken ticker erro: {data['error']}")
     result_key = list(data['result'].keys())[0]
     tk = data['result'][result_key]
-    return {'last': float(tk['c'][0]), 'bid': float(tk['b'][0]), 'ask': float(tk['a'][0])}
+    preco = float(tk['c'][0])
+    if preco <= 0:
+        raise Exception(f"Preço inválido ($0) retornado pela API para {par}")
+    return {'last': preco, 'bid': float(tk['b'][0]), 'ask': float(tk['a'][0])}
 
 # ─────────────────────────────────────────────
 # UTILIDADES
@@ -633,6 +636,12 @@ def fechar_posicao(par, motivo="SINAL"):
         preco  = ticker['last']
         tipo   = pos['tipo']
 
+        # Guarda contra preço claramente errado (API instável no redeploy)
+        preco_entrada = pos['preco_entrada']
+        if preco <= 0 or preco < preco_entrada * 0.20 or preco > preco_entrada * 10:
+            log.warning(f"fechar_posicao {par}: preço suspeito ${preco:.6f} (entrada ${preco_entrada:.6f}) — abortando fechamento")
+            return
+
         valor_investido = pos['valor_investido']
         taxa_saida      = valor_investido * TAXA_OPERACAO
 
@@ -721,7 +730,14 @@ def checar_risco(par):
     try:
         ticker = fetch_ticker(par)
         preco  = ticker['last']
-    except:
+    except Exception as e:
+        log.warning(f"checar_risco {par}: API falhou ({e}) — ignorando")
+        return False
+
+    # Guarda contra preço claramente errado (API instável no redeploy)
+    preco_entrada = pos['preco_entrada']
+    if preco <= 0 or preco < preco_entrada * 0.20 or preco > preco_entrada * 10:
+        log.warning(f"checar_risco {par}: preço suspeito ${preco:.6f} (entrada ${preco_entrada:.6f}) — ignorando")
         return False
 
     if tipo == 'LONG':
