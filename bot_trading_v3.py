@@ -1216,6 +1216,22 @@ def index():
 def health():
     return jsonify({'ok': True, 'versao': 'v3', 'uptime': estado['ultimo_update']})
 
+@app.route('/admin/reset-capital', methods=['POST'])
+def reset_capital():
+    """Redefine capital sem apagar histórico nem posições abertas."""
+    data = request.get_json(force=True) or {}
+    novo_capital = float(data.get('capital', CAPITAL_SIMULADO))
+    estado['capital_atual']   = novo_capital
+    estado['capital_inicial'] = novo_capital
+    estado['capital_reserva'] = novo_capital * RESERVA_PCT
+    estado['perdas_dia']      = 0.0
+    estado['lucros_dia']      = 0.0
+    estado['wins_dia']        = 0
+    estado['losses_dia']      = 0
+    salvar_estado()
+    log.info(f"RESET CAPITAL → ${novo_capital:.2f}")
+    return jsonify({'ok': True, 'capital': novo_capital})
+
 def rodar_api():
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
