@@ -157,11 +157,14 @@ def registrar_aprendizado(tipo, msg, par=''):
 
 def atualizar_stats(par, resultado, hora):
     if par not in estado['stats_pares']:
-        estado['stats_pares'][par] = {'wins': 0, 'losses': 0}
+        estado['stats_pares'][par] = {'wins': 0, 'losses': 0, 'stops_seguidos': 0}
+    st = estado['stats_pares'][par]
     if resultado == 'win':
-        estado['stats_pares'][par]['wins'] += 1
+        st['wins'] += 1
+        st['stops_seguidos'] = 0  # reset sequência ao ganhar
     else:
-        estado['stats_pares'][par]['losses'] += 1
+        st['losses'] += 1
+        st['stops_seguidos'] = st.get('stops_seguidos', 0) + 1
 
     if hora not in estado['stats_horarios']:
         estado['stats_horarios'][hora] = {'wins': 0, 'losses': 0}
@@ -230,11 +233,29 @@ def ajustar_parametros_ml():
             w = st.get('wins', 0)
             l = st.get('losses', 0)
             tot = w + l
-            if tot >= 4 and l / tot >= 0.75:
+            stops_seguidos = st.get('stops_seguidos', 0)
+            # Bloqueio rápido: 2 stops seguidos → bloqueia 3h
+            if stops_seguidos >= 2 and not st.get('bloqueado'):
                 st['bloqueado'] = True
-                registrar_aprendizado('ML_BLOQUEIO', f'{par} bloqueado (perda {int(l/tot*100)}%)', par)
+                st['bloqueado_ate'] = (datetime.now() + timedelta(hours=3)).isoformat()
+                registrar_aprendizado('ML_BLOQUEIO', f'{par} bloqueado (2 stops seguidos) por 3h', par)
+                log.info(f"ML: {par} bloqueado 3h por 2 stops seguidos")
+            # Bloqueio longo: 75% de perda com 4+ trades
+            elif tot >= 4 and l / tot >= 0.75 and not st.get('bloqueado'):
+                st['bloqueado'] = True
+                st['bloqueado_ate'] = (datetime.now() + timedelta(hours=6)).isoformat()
+                registrar_aprendizado('ML_BLOQUEIO', f'{par} bloqueado (perda {int(l/tot*100)}%) por 6h', par)
+            # Desbloqueio automático por tempo
+            elif st.get('bloqueado') and st.get('bloqueado_ate'):
+                if datetime.now().isoformat() > st['bloqueado_ate']:
+                    st['bloqueado'] = False
+                    st['stops_seguidos'] = 0
+                    registrar_aprendizado('ML_DESBLOQUEIO', f'{par} desbloqueado (tempo expirado)', par)
+                    log.info(f"ML: {par} desbloqueado após cooldown")
+            # Desbloqueio por recuperação
             elif tot >= 6 and w / tot >= 0.60 and st.get('bloqueado'):
                 st['bloqueado'] = False
+                st['stops_seguidos'] = 0
                 registrar_aprendizado('ML_DESBLOQUEIO', f'{par} desbloqueado ({int(w/tot*100)}% WR)', par)
 
         estado['ml_ciclos'] += 1
@@ -355,9 +376,22 @@ def calcular_score(par):
         if 35 <= rsi_val <= 65:
             score_long += 2
         elif rsi_val < 35:
-            score_long += 1
+            score_long += 2  # sobrevendido = oportunidade de compra
+        elif rsi_val < 28:
+            score_long += 3; sinal_long = 'COMPRA'  # muito sobrevendido = sinal forte
         elif rsi_val > RSI_SOBRECOMPRADO:
             score_long -= 3; sinal_long = 'NEUTRO'
+
+        # Bônus: queda grande recente = possível fundo (oportunidade)
+        # queda_24h é negativa quando o preço caiu do pico
+        if queda_24h <= -8:
+            score_long += 3  # caiu 8%+ do pico nas últimas 24h → compra na baixa forte
+            sinal_long = 'COMPRA'
+            log.info(f"{par} | QUEDA GRANDE {queda_24h:.1f}% → bônus oportunidade +3")
+        elif queda_24h <= -5:
+            score_long += 2  # caiu 5%+ → bônus moderado
+        elif queda_24h <= -3:
+            score_long += 1  # caiu 3%+ → bônus leve
 
         if not tendencia_alta_1h and sinal_long == 'COMPRA':
             sinal_long = 'NEUTRO'; score_long -= 2
