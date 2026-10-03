@@ -5,7 +5,7 @@ import os, json, time, threading, logging, pathlib
 from datetime import datetime, timedelta
 import pandas as pd
 import requests
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 from flask_cors import CORS
 
 # ─────────────────────────────────────────────
@@ -108,16 +108,25 @@ def fetch_ohlcv(par, interval='5m', limit=288):
     minutes = tf_map.get(interval, 5)
     symbol  = par.replace('/', '')
     url     = f'https://api.kraken.com/0/public/OHLC?pair={symbol}&interval={minutes}&count={limit}'
-    r = requests.get(url, timeout=15)
-    data = r.json()
-    if data.get('error'):
-        raise Exception(f"Kraken erro: {data['error']}")
-    result_key = [k for k in data['result'] if k != 'last'][0]
-    rows = data['result'][result_key]
-    df = pd.DataFrame(rows, columns=['time','open','high','low','close','vwap','volume','count'])
-    for col in ['open','high','low','close','volume']:
-        df[col] = df[col].astype(float)
-    return df
+    for tentativa in range(3):
+        try:
+            r = requests.get(url, timeout=15)
+            data = r.json()
+            if data.get('error'):
+                raise Exception(f"Kraken OHLC erro: {data['error']}")
+            result_key = [k for k in data['result'] if k != 'last'][0]
+            rows = data['result'][result_key]
+            if not rows:
+                raise Exception(f"Kraken OHLC retornou lista vazia para {par}")
+            df = pd.DataFrame(rows, columns=['time','open','high','low','close','vwap','volume','count'])
+            for col in ['open','high','low','close','volume']:
+                df[col] = df[col].astype(float)
+            return df
+        except Exception as e:
+            log.warning(f"fetch_ohlcv {par} tentativa {tentativa+1}/3: {e}")
+            if tentativa < 2:
+                time.sleep(2)
+    raise Exception(f"fetch_ohlcv {par}: falhou após 3 tentativas")
 
 def fetch_ticker(par):
     symbol = par.replace('/', '')
